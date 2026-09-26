@@ -1,11 +1,14 @@
 """内存数据仓库：给每个业务模块准备一份可筛选、可流转的示例数据。
 
 真实项目里这里会换成数据库访问层；当前实现只依赖标准库，保证克隆下来就能起。
+各模块的「待处理/异常」判定不在这里各写一遍，统一查 budget_rules.MODULE_RULES，
+没登记规则的模块才回退到行内的 pending/abnormal 标志。
 """
 from __future__ import annotations
 
 from typing import Any
 
+from app.budget_rules import MODULE_RULES
 from app.seed import SEED_ROWS
 
 
@@ -14,6 +17,11 @@ class Store:
         self._tables: dict[str, list[dict[str, Any]]] = {
             name: [dict(row) for row in rows] for name, rows in SEED_ROWS.items()
         }
+        for name, rows in self._tables.items():
+            normalize = MODULE_RULES.get(name, {}).get("normalize")
+            if normalize is not None:
+                for row in rows:
+                    normalize(row)
 
     def module_names(self) -> list[str]:
         return sorted(self._tables)
@@ -31,11 +39,18 @@ class Store:
         modules: list[dict[str, object]] = []
         for name in self.module_names():
             rows = self.rows(name)
+            rules = MODULE_RULES.get(name)
+            if rules is not None:
+                pending = sum(1 for row in rows if rules["is_pending"](row))
+                abnormal = sum(1 for row in rows if rules["is_abnormal"](row))
+            else:
+                pending = sum(1 for row in rows if row.get("pending"))
+                abnormal = sum(1 for row in rows if row.get("abnormal"))
             modules.append({
                 "name": name,
                 "created": len(rows),
-                "pending": sum(1 for row in rows if row.get("pending")),
-                "abnormal": sum(1 for row in rows if row.get("abnormal")),
+                "pending": pending,
+                "abnormal": abnormal,
             })
         cards = [
             {"label": "业务模块", "value": len(modules)},

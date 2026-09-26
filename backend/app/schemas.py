@@ -13,6 +13,8 @@ class PageResult(BaseModel, Generic[T]):
     total: int
     page: int = 1
     size: int = 20
+    # 模块级汇总（如预算总额、超支科目数）；没有汇总需求的模块不返回。
+    stats: dict[str, Any] | None = None
 
 
 class ActionResult(BaseModel):

@@ -26,8 +26,15 @@ def list_entries(
     """按科目编号与状态过滤预算科目列表；没有数据时返回空页，不报错。"""
     if size > 200:
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
-    items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
-    return PageResult(items=items, total=total, page=page, size=size)
+    items, total, stats = service.list_entries(keyword=keyword, status=status, page=page, size=size)
+    return PageResult(items=items, total=total, page=page, size=size, stats=stats)
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出预算科目清单：返回当前过滤条件下的全量数据。"""
+    items, total, stats = service.list_entries(page=1, size=10000)
+    return {"module": "budget", "total": total, "stats": stats, "items": items}
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -52,14 +59,8 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     """对单条预算科目执行提交审批、确认批复、标记超支；不允许的动作会被拦下并说明原因。"""
     action = str(payload.values.get("action") or "").strip()
-    entry, message = service.run_action(entry_id, action)
+    operator = str(payload.values.get("operator") or "").strip()
+    entry, message = service.run_action(entry_id, action, operator or None)
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出预算科目清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "budget", "total": total, "items": items}

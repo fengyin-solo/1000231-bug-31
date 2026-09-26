@@ -36,17 +36,20 @@
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
+          <td v-for="column in columns" :key="column">{{ formatCell(column, row[column]) }}</td>
           <td class="row-actions">
-            <button
-              v-for="action in actions"
-              :key="action"
-              class="link"
-              type="button"
-              @click="runAction(action, row)"
-            >
-              {{ action }}
-            </button>
+            <template v-if="rowActions(row).length">
+              <button
+                v-for="action in rowActions(row)"
+                :key="action"
+                class="link"
+                type="button"
+                @click="runAction(action, row)"
+              >
+                {{ action }}
+              </button>
+            </template>
+            <span v-else class="muted-text">—</span>
           </td>
         </tr>
         <tr v-if="!rows.length">
@@ -66,20 +69,37 @@
 import { onMounted, ref } from 'vue'
 
 import { request } from '@/api/client'
+import { useSessionStore } from '@/stores/session'
 
-type Row = Record<string, string | number | null>
+type Row = Record<string, string | number | boolean | string[] | null>
+type Stat = { label: string; value: number }
 
 const ENDPOINT = '/api/budget'
 const columns = ["科目编号", "科目名称", "费用类别", "预算金额", "已用金额", "剩余额度", "审批人", "科目状态"]
-const actions = ["提交审批", "确认批复", "标记超支"]
-const statuses = ["待审批", "已批复", "执行中", "已超支"]
-const stats = [{"label": "预算总额", "value": 0}, {"label": "已用金额", "value": 0}, {"label": "超支科目", "value": 0}]
+const AMOUNT_COLUMNS = new Set(["预算金额", "已用金额", "剩余额度"])
+// 统计卡片顺序固定，数值全部来自后端同一口径，前端不再自行计算。
+const EMPTY_STATS: Stat[] = [{"label": "预算总额", "value": 0}, {"label": "已用金额", "value": 0}, {"label": "超支科目", "value": 0}]
 
+const session = useSessionStore()
 const rows = ref<Row[]>([])
 const total = ref(0)
+const stats = ref<Stat[]>(EMPTY_STATS)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+
+function rowActions(row: Row): string[] {
+  const actions = row.actions
+  return Array.isArray(actions) ? (actions as string[]) : []
+}
+
+function formatCell(column: string, value: Row[keyof Row]): string | number | null {
+  if (value === null || value === undefined || value === '') return '—'
+  if (AMOUNT_COLUMNS.has(column) && typeof value === 'number') {
+    return value.toFixed(2)
+  }
+  return value as string | number
+}
 
 function resetFilters() {
   filters.value = {}
@@ -99,11 +119,18 @@ async function runAction(action: string, row: Row) {
   try {
     const response = await request(`${ENDPOINT}/${row.id}/actions`, {
       method: 'POST',
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ action, operator: session.operator }),
     })
     if (!response.ok) {
       throw new Error('预算科目动作未生效，请稍后重试')
     }
+    const payload = await response.json()
+    // 守卫拦截时后端返回 ok:false；必须展示后端消息，不能静默刷新成“成功”。
+    if (!payload.ok) {
+      errorMessage.value = payload.message || '预算科目操作未生效'
+      return
+    }
+    errorMessage.value = payload.message || ''
     await reload()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '预算科目操作失败'
@@ -121,6 +148,11 @@ async function reload() {
     const payload = await response.json()
     rows.value = payload.items ?? []
     total.value = payload.total ?? rows.value.length
+    const remoteStats = payload.stats ?? {}
+    stats.value = EMPTY_STATS.map((item) => ({
+      label: item.label,
+      value: Number(remoteStats[item.label] ?? 0),
+    }))
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '预算科目列表读取失败'
   }
