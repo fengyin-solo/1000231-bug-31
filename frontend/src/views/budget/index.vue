@@ -39,7 +39,7 @@
           <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
           <td class="row-actions">
             <button
-              v-for="action in actions"
+              v-for="action in rowActions(row)"
               :key="action"
               class="link"
               type="button"
@@ -47,6 +47,7 @@
             >
               {{ action }}
             </button>
+            <span v-if="!rowActions(row).length" class="muted">—</span>
           </td>
         </tr>
         <tr v-if="!rows.length">
@@ -67,19 +68,27 @@ import { onMounted, ref } from 'vue'
 
 import { request } from '@/api/client'
 
-type Row = Record<string, string | number | null>
+type Row = Record<string, string | number | string[] | null>
+type Summary = { budget_total: number; used_total: number; overspent_count: number }
 
 const ENDPOINT = '/api/budget'
 const columns = ["科目编号", "科目名称", "费用类别", "预算金额", "已用金额", "剩余额度", "审批人", "科目状态"]
-const actions = ["提交审批", "确认批复", "标记超支"]
-const statuses = ["待审批", "已批复", "执行中", "已超支"]
-const stats = [{"label": "预算总额", "value": 0}, {"label": "已用金额", "value": 0}, {"label": "超支科目", "value": 0}]
+const stats = ref([
+  { label: "预算总额", value: 0 },
+  { label: "已用金额", value: 0 },
+  { label: "超支科目", value: 0 },
+])
 
 const rows = ref<Row[]>([])
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+
+// 可执行动作完全由后端按统一规则下发，前端不再维护动作/状态表。
+function rowActions(row: Row): string[] {
+  return Array.isArray(row.actions) ? (row.actions as string[]) : []
+}
 
 function resetFilters() {
   filters.value = {}
@@ -101,12 +110,30 @@ async function runAction(action: string, row: Row) {
       method: 'POST',
       body: JSON.stringify({ action }),
     })
-    if (!response.ok) {
-      throw new Error('预算科目动作未生效，请稍后重试')
+    const payload = await response.json().catch(() => null)
+    if (!response.ok || !payload?.ok) {
+      throw new Error(payload?.message || '预算科目动作未生效，请稍后重试')
     }
-    await reload()
+    await Promise.all([reload(), loadSummary()])
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '预算科目操作失败'
+  }
+}
+
+async function loadSummary() {
+  try {
+    const response = await request(`${ENDPOINT}/summary`)
+    if (!response.ok) {
+      return
+    }
+    const summary = (await response.json()) as Summary
+    stats.value = [
+      { label: "预算总额", value: summary.budget_total },
+      { label: "已用金额", value: summary.used_total },
+      { label: "超支科目", value: summary.overspent_count },
+    ]
+  } catch {
+    // 统计卡读取失败不阻断列表，页脚也不报错，保留上一次的值。
   }
 }
 
@@ -126,5 +153,8 @@ async function reload() {
   }
 }
 
-onMounted(reload)
+onMounted(() => {
+  void reload()
+  void loadSummary()
+})
 </script>
